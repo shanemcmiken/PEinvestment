@@ -13,6 +13,19 @@
 #--------------------------------#
 using Plots
 using Distributions
+using QuantEcon
+
+#--------------------------------#
+#         PARAMETERIZATION
+#--------------------------------#
+α   = 0.7
+p   = 1.2
+δ   = 0.1
+r   = 0.04
+ρ   = 0.8
+σ   = 0.2
+γ_c = 0.0
+γ_f = 0.0
 
 #--------------------------------#
 #  GRIDS and TRANSITION MATRIX
@@ -21,8 +34,15 @@ using Distributions
 # Tauchen (1986)
 function MyTauchen(σ_a::Float64,ρ_a::Float64,na::Int64,m::Float64)
 
+  # Discrete markov process approximation for AR(1)
+  # y = ρ_a * y_  + σ_a * ϵ 
+  # m: number of standard deviations
+  # σ_a: standard deviations
+  # ρ_a: AR(1) parameter
+  # na: number of grid points
+
   vecsize = na
-  σ_y = sqrt(σ_a^2 / (1-(ρ_a^2))) # Stationary distribution variance
+  σ_y = σ_a / sqrt(1-(ρ_a^2)) # Stationary distribution variance
   step = 2 * m * σ_y / (vecsize-1)
   agrid  = [-m*σ_y + (i-1)*step for i∈1:na]
 
@@ -42,16 +62,22 @@ function MyTauchen(σ_a::Float64,ρ_a::Float64,na::Int64,m::Float64)
     end #k
   end #j
 
-  agrid = exp.(agrid) # Exponentiate grid
+  # agrid = exp.(agrid) # Exponentiate grid
 
-  return agrid, P #return productivity grid and Markov transition matrix
+  return agrid, P #return grid and Markov transition matrix
 end
 
 # technology grid
 cover = 5
-nz    = 2*cover+1
-σ     = 1.2
-ρ     = 0.2
+nz    = 5*cover+1
 m     = 2.5
+zgrid, P = MyTauchen(σ,ρ,nz,m)
+zgrid = exp.(zgrid) # exponentiate grid
 
-zgrid, P = MyTauchen(σ,ρ,na,m)
+# capital grid
+nk = 100
+kmax = ((maximum(zgrid)*α)/(r+δ))^(1.0/(1.0-α))
+kgrid = [kmax*(1-δ)^i for i∈0:(nk-1)]
+
+
+
