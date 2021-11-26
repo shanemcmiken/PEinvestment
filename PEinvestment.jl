@@ -215,17 +215,113 @@ end
 @time valfunc, index, crit = vfi(Vbar,zgrid,kgrid,P)
 
 #------------------------------------------#
-#  VALUE FUNCTION ITERATION  - VECTORIZED
+#  VALUE FUNCTION ITERATION : V2-VECTORIZED
 #------------------------------------------#
 
 function vfivec(Vbar::Float64, zgrid::Array, kgrid::Array, P::Array; α = α, r = r, δ = δ, γ_c = γ_c, γ_f = γ_f, p = p,crit = Inf, maxiter = 10000, iter = 0, tol = 1.0e-5, nfix = 10)
 
-  
+  nz = size(zgrid,1)
+  nk = size(kgrid,1)
+  V_init = fill(Vbar, (nz,nk))
+  V_next = Array{Float64,1}
+  index = ones(nz*nk,)
+
+  # useful grids
+  kkgr = vec(repeat(kgrid',nz))
+  zzgr = repeat(zgrid,nk,1)
+
+  # compute model objects
+  R = zzgr.*kkgr.^α .- p*kgrid' .+ p*(1.0-δ)*kkgr .- γ_c/2.0 .* ((kgrid' .- (1.0-δ)*kkgr)./kkgr).^2 .*kkgr - γ_f.*zzgr.*kkgr.^α.*(kgrid'.>(1-δ)*kkgr)  
+
+  while (crit > tol && iter < maxiter)
+    
+    if mod(iter,nfix) == 0 # Howard acceleration
+      
+      # compute (nz*nk*nk)-dimensional value function
+      obj = R + (1.0/(1.0+r)).*repeat(P*V_init,nk)
+
+      # Get maximum
+      V_next, index = findmax(obj, dims = 2)
+      
+    else # on mod(iter,nfix) != 0, update the value function only.
+
+       # Re-use conjectured index
+      idx = [index[i][2] for i∈1:(nz*nk)]
+
+      # E(V) condition on A(t) and each possible K(t+1)
+      EVp = P*V_init
+      evp_k = zeros(nk*nz,)
+      for ind = 1:(nz*nk)
+        kk = convert(Int, floor((ind-0.05)/nz))+1
+        zz = convert(Int, floor(mod(ind-0.05,nz))+1)
+        evp_k[ind] = EVp[zz,idx[ind]]
+      end
+
+      # Compute return function using conjectured policy - idx
+      R_idx = zzgr.*kkgr.^α .- p.*kgrid[idx].+ p.*(1.0-δ).*kkgr .- γ_c/2.0 .* ((kgrid[idx] .- (1.0-δ)*kkgr)./kkgr).^2 .*kkgr - γ_f.*zzgr.*kkgr.^α.*(kgrid[idx].>(1-δ)*kkgr)
+
+      # Re-compute value function under conjectured optimal policy
+      V_next = R_idx + (1.0+r).^(-1) .* evp_k
+
+    end
+
+    # check tolerance
+    V_next = reshape(V_next,nz,nk)
+    crit = maximum(abs.(V_next .- V_init))
+    V_init = copy(V_next)
+    iter += 1
+    
+    print("iteration: ",iter, ", critical val: ", crit*1.0e5," times 10^5", "\n")
+  end
+
+  index = [index[i][2] for i∈1:(nz*nk)]
+  return V_next, index, crit
 
 end
 
+@time valfunc, index, crit = vfivec(Vbar,zgrid,kgrid,P)
+
+#------------------------------------------#
+#  ERGODIC DISTRIBUTION - Young (2010)
+#------------------------------------------#
+
+function young(index::Array, P::Array; crit = Inf, maxiter = 10000, iter = 0, tol = 1.0e-5)
+
+  # intialise masses
+  μ_init = fill((1/(nz*nk)), (nz,nk))
+  μ_next = zeros(nz,nk)
+
+  while (crit > tol && iter < maxiter)
+    
+    # intialise
+    μ_next = zeros(nz,nk)
+
+    # use policies from vfi to infer masses next period
+    for ind = 1:(nz*nk)
+      kk = convert(Int, floor((ind-0.05)/nz))+1
+      zz = convert(Int, floor(mod(ind-0.05,nz))+1)
+      μ_next[zz,index[ind]] =  μ_next[zz,index[ind]] + μ_init[zz,kk] 
+    end
+
+    # update realisation of productivity next period 
+    μ_next = P*μ_next
+    
+    # check tolerance
+    crit = maximum(abs.(μ_init .- μ_next))
+    μ_init = copy(μ_next)
+    iter += 1
+    
+    print("iteration: ",iter, ", critical val: ", crit*1.0e5," times 10^5", "\n")
+
+  end
+
+  return μ_next, crit
+end
+
+μ_ergo, crit = young(index,P)
 
 
-
-
+#------------------------------------------#
+#  EXTRACTING RESULTS FROM THE MODEL
+#------------------------------------------#
 
