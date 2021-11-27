@@ -418,9 +418,3 @@ p11 = plot(zgrid./kgrid[cord[2]],kgrid[pols[:,cord[2]]], ylabel = "k policy", xl
 eqpolicy = plot(p11, legend = false)
 savefig(eqpolicy,"./eqpolicy.png")
 display(eqpolicy)
-
-
-
-
-
-
