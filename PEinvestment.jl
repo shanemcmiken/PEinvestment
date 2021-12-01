@@ -11,22 +11,55 @@
 #--------------------------------#
 #         PREAMBLE
 #--------------------------------#
-using Plots
-using Distributions
-using QuantEcon
-using Distributed
+using Plots # plots
+using Distributions # cdf(normal())
+#using QuantEcon
+#using Distributed
+using Parameters  # macros: @with_kw & @unpack
 
 #--------------------------------#
-#         PARAMETERIZATION
+#         PARAMETERIZATIONS
 #--------------------------------#
-α   = 0.7
-p   = 1.2
-δ   = 0.1
-r   = 0.04
-ρ   = 0.8
-σ   = 0.2
-γ_c = 2.5
-γ_f = 0.0
+
+@with_kw struct NoAC
+  α::Float64    = 0.7
+  p::Float64    = 1.2
+  δ::Float64    = 0.1
+  r::Float64    = 0.04
+  ρ::Float64    = 0.8
+  σ::Float64    = 0.2
+  γ_c::Float64  = 0.0
+  γ_f::Float64  = 0.0
+end
+
+@with_kw struct ConvexAC
+  α::Float64    = 0.7
+  p::Float64    = 1.2
+  δ::Float64    = 0.1
+  r::Float64    = 0.04
+  ρ::Float64    = 0.8
+  σ::Float64    = 0.2
+  γ_c::Float64  = 2.5
+  γ_f::Float64  = 0.0
+end
+
+@with_kw struct FixedAC
+  α::Float64    = 0.7
+  p::Float64    = 1.2
+  δ::Float64    = 0.1
+  r::Float64    = 0.04
+  ρ::Float64    = 0.8
+  σ::Float64    = 0.2
+  γ_c::Float64  = 0.0
+  γ_f::Float64  = 0.05
+end
+
+α = 0.7
+p = 1.2
+δ = 0.1
+r = 0.04
+ρ = 0.8
+σ = 0.2
 
 #steady state
 kbar = (α/(p*(r+δ)))^(1.0/(1.0-α))
@@ -214,8 +247,6 @@ function vfi(Vbar::Float64, zgrid::Array, kgrid::Array, P::Array; α = α, r = r
   return V_next, index, crit
 end
 
-@time valfunc, index, crit = vfi(Vbar,zgrid,kgrid,P)
-
 #------------------------------------------#
 #  VALUE FUNCTION ITERATION : VECTORIZED
 #------------------------------------------#
@@ -281,8 +312,6 @@ function vfivec(Vbar::Float64, zgrid::Array, kgrid::Array, P::Array; α = α, r 
 
 end
 
-@time valfunc, index, crit = vfivec(Vbar,zgrid,kgrid,P)
-
 #------------------------------------------#
 #  ERGODIC DISTRIBUTION - Young (2010)
 #------------------------------------------#
@@ -316,105 +345,117 @@ function young(index::Array, P::Array; crit = Inf, maxiter = 10000, iter = 0, to
   return μ_init, crit, iter
 end
 
-@time μ_ergodic, crit, iterfin = young(index,P)
-
 #------------------------------------------#
 #  EXTRACTING RESULTS FROM THE MODEL
 #------------------------------------------#
 
-## (a)
-#plot ergodic distribution
-ergodicdist = heatmap(μ_ergodic, color = :greys)
-savefig(ergodicdist,"./ergodicdistribution.png")
-display(ergodicdist)
+# solve model
 
-#plot policy function
-pols = reshape(index,(nz,nk)) # policies
-zlow = pols[cover-2,:] # fix productivity at low
-zmid = pols[cover+1,:] # fix productivity at steady state
-zhigh = pols[cover+4,:] # fix productivity high
+para = [NoAC, ConvexAC, FixedAC]
+for (ii,str) in enumerate(para)
+  
+  @unpack α, p, δ, r, ρ, σ, γ_c, γ_f= str()
 
-p1 = plot(kgrid,kgrid[zlow], ylabel = "low productivity", title = "k policy")
-p2 = plot(kgrid,kgrid[zmid], ylabel = "steady state productivity")
-p3 = plot(kgrid,kgrid[zhigh], ylabel = "high productivity")
-p4 = heatmap(pols, color = :greys, ylabel = "Z", xlabel = "K")
+  #@time valfunc, index, crit = vfi(Vbar,zgrid,kgrid,P) #slower
+  @time valfunc, index, crit = vfivec(Vbar,zgrid,kgrid,P)
+  @time μ_ergodic, crit, iterfin = young(index,P)
 
-policyfunctions = plot(p1,p2,p3,p4, layout = (2,2), legend = false)
-savefig(policyfunctions,"./policyfunctions.png")
-display(policyfunctions)
 
-#plot value function 
-p5 = plot(kgrid,valfunc[cover-2,zlow], ylabel = "low productivity", title = "Value Function")
-p6 = plot(kgrid,valfunc[cover+1,zlow], ylabel = "steady state productivity")
-p7 = plot(kgrid,valfunc[cover+4,zlow], ylabel = "high productivity")
-p8 = heatmap(valfunc, color = :greys, ylabel = "Z", xlabel = "K")
+  ## (a)
+  #plot ergodic distribution
+  ergodicdist = heatmap(μ_ergodic, color = :greys)
+  savefig(ergodicdist,joinpath("./ergodicdistribution","str",".png"))
+  display(ergodicdist)
 
-valuefunction = plot(p5,p6,p7,p8, layout = (2,2), legend = false)
-savefig(valuefunction,"./valuefunction.png")
-display(valuefunction)
+  #plot policy function
+  pols = reshape(index,(nz,nk)) # policies
+  zlow = pols[cover-2,:] # fix productivity at low
+  zmid = pols[cover+1,:] # fix productivity at steady state
+  zhigh = pols[cover+4,:] # fix productivity high
 
-## (b) marginal Distributions
-marginal_k = sum(μ_ergodic, dims = 1)
-marginal_z = sum(μ_ergodic, dims = 2)
-p9 = plot(zgrid, marginal_z, ylabel = "probability density", title = "marginal productivity distribution" )
-p10 = plot(kgrid, marginal_k', title = "marginal capital distribution" )
+  p1 = plot(kgrid,kgrid[zlow], ylabel = "low productivity", title = "k policy")
+  p2 = plot(kgrid,kgrid[zmid], ylabel = "steady state productivity")
+  p3 = plot(kgrid,kgrid[zhigh], ylabel = "high productivity")
+  p4 = heatmap(pols, color = :greys, ylabel = "Z", xlabel = "K")
 
-marginaldistributions = plot(p9,p10, layout = (1,2), legend = false)
-savefig(marginaldistributions,"./marginaldistributions.png")
-display(marginaldistributions)
+  policyfunctions = plot(p1,p2,p3,p4, layout = (2,2), legend = false)
+  savefig(policyfunctions,"./policyfunctions.png")
+  display(policyfunctions)
 
-## (c)
-kkgr = log.(repeat(kgrid',nz))
-zzgr = log.(repeat(zgrid,1,nk))
-yygr = log.(exp.(zzgr).*exp.(kkgr).^α)
-iigr = (kgrid[pols]-(1-δ).*exp.(kkgr))./exp.(kkgr)
+  #plot value function 
+  p5 = plot(kgrid,valfunc[cover-2,zlow], ylabel = "low productivity", title = "Value Function")
+  p6 = plot(kgrid,valfunc[cover+1,zlow], ylabel = "steady state productivity")
+  p7 = plot(kgrid,valfunc[cover+4,zlow], ylabel = "high productivity")
+  p8 = heatmap(valfunc, color = :greys, ylabel = "Z", xlabel = "K")
 
-# mean
-X = [kkgr, zzgr, yygr, iigr]
-EX = zeros(size(X),)
-for (ii, x) in enumerate(X)
-  EX[ii] = sum(x.*μ_ergodic)
-end
+  valuefunction = plot(p5,p6,p7,p8, layout = (2,2), legend = false)
+  savefig(valuefunction,"./valuefunction.png")
+  display(valuefunction)
 
-#variance
-STDX = zeros(size(X),)
-for (ii, x) in enumerate(X)
-  STDX[ii] = sum(x.^2 .*μ_ergodic) - EX[ii].^2
-end 
+  ## (b) marginal Distributions
+  marginal_k = sum(μ_ergodic, dims = 1)
+  marginal_z = sum(μ_ergodic, dims = 2)
+  p9 = plot(zgrid, marginal_z, ylabel = "probability density", title = "marginal productivity distribution" )
+  p10 = plot(kgrid, marginal_k', title = "marginal capital distribution" )
 
-# correlation matrix
-CORRX = zeros(size(X)[1],size(X)[1])
-for (ii,xi) in enumerate(X)
-  for (jj,xj) in enumerate(X)
-    CORRX[ii,jj] = (sum(xi.*xj.*μ_ergodic) - EX[ii]*EX[jj])/(sqrt.(VARX[ii])*sqrt.(VARX[jj]))
+  marginaldistributions = plot(p9,p10, layout = (1,2), legend = false)
+  savefig(marginaldistributions,"./marginaldistributions.png")
+  display(marginaldistributions)
+
+  ## (c)
+  kkgr = log.(repeat(kgrid',nz))
+  zzgr = log.(repeat(zgrid,1,nk))
+  yygr = log.(exp.(zzgr).*exp.(kkgr).^α)
+  iigr = (kgrid[pols]-(1-δ).*exp.(kkgr))./exp.(kkgr)
+
+  # mean
+  X = [kkgr, zzgr, yygr, iigr]
+  EX = zeros(size(X),)
+  for (ii, x) in enumerate(X)
+    EX[ii] = sum(x.*μ_ergodic)
   end
+
+  #variance
+  STDX = zeros(size(X),)
+  for (ii, x) in enumerate(X)
+    STDX[ii] = sum(x.^2 .*μ_ergodic) - EX[ii].^2
+  end 
+
+  # correlation matrix
+  CORRX = zeros(size(X)[1],size(X)[1])
+  for (ii,xi) in enumerate(X)
+    for (jj,xj) in enumerate(X)
+      CORRX[ii,jj] = (sum(xi.*xj.*μ_ergodic) - EX[ii]*EX[jj])/(STDX[ii]*STDX[jj])
+    end
+  end
+  
+
+  ## (d) obtain aggregates
+  kkgr = repeat(kgrid',nz)
+  zzgr = repeat(zgrid,1,nk)
+  yygr = zzgr.*kkgr.^α
+  iigr = (kgrid[pols]-(1-δ).*kkgr)./(kkgr)
+  vvgr = copy(valfunc)
+
+  # mean
+  X = [kkgr, zzgr, yygr, iigr, vvgr]
+  EX = zeros(size(X),)
+  for (ii, x) in enumerate(X)
+    EX[ii] = sum(x.*μ_ergodic)
+  end
+
+  ## (e) 
+  TFP = EX[3]/EX[1]^α
+
+  ## (f) implied TFP is larger than average of true underlying productivity because larger (more productive) firms produce more.
+
+  ## (g)
+  #find coordinates of maximal mass
+  val, cord = findmax(μ_ergodic)
+  p11 = plot(zgrid./kgrid[cord[2]],kgrid[pols[:,cord[2]]], ylabel = "k policy", xlabel = "z/k")
+  eqpolicy = plot(p11, legend = false)
+  savefig(eqpolicy,"./eqpolicy.png")
+  display(eqpolicy)
+
 end
 
-sum(X*X.μ_ergodic)
-
-## (d) obtain aggregates
-kkgr = repeat(kgrid',nz)
-zzgr = repeat(zgrid,1,nk)
-yygr = zzgr.*kkgr.^α
-iigr = (kgrid[pols]-(1-δ).*kkgr)./(kkgr)
-vvgr = copy(valfunc)
-
-# mean
-X = [kkgr, zzgr, yygr, iigr, vvgr]
-EX = zeros(size(X),)
-for (ii, x) in enumerate(X)
-  EX[ii] = sum(x.*μ_ergodic)
-end
-
-## (e) 
-TFP = EX[3]/EX[1]^α
-
-## (f) implied TFP is larger than average of true underlying productivity because larger (more productive) firms produce more.
-
-## (g)
-#find coordinates of maximal mass
-val, cord = findmax(μ_ergodic)
-p11 = plot(zgrid./kgrid[cord[2]],kgrid[pols[:,cord[2]]], ylabel = "k policy", xlabel = "z/k")
-eqpolicy = plot(p11, legend = false)
-savefig(eqpolicy,"./eqpolicy.png")
-display(eqpolicy)
