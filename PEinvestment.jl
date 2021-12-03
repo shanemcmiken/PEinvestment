@@ -55,19 +55,8 @@ end
   γ_f::Float64  = 0.05
 end
 
-α = 0.7
-p = 1.2
-δ = 0.1
-r = 0.04
-ρ = 0.8
-σ = 0.2
-
-#steady state
-kbar = (α/(p*(r+δ)))^(1.0/(1.0-α))
-Vbar = ((1.0+r)/r)*(kbar^α - δ*kbar)
-
 #--------------------------------#
-#  GRIDS and TRANSITION MATRIX
+#  DESCRETIZE AR(1) PROCESS
 #--------------------------------#
 
 # Tauchen (1986)
@@ -105,19 +94,6 @@ function MyTauchen(σ_a::Float64,ρ_a::Float64,na::Int64,m::Float64)
 
   return agrid, P #return grid and Markov transition matrix
 end
-
-# technology grid
-cover = 5
-nz    = 2*cover+1
-m     = 2.5
-zgrid, P = MyTauchen(σ,ρ,nz,m)
-zgrid = exp.(zgrid) # exponentiate grid
-
-# capital grid
-nk = 100
-kmax = ((maximum(zgrid)*α)/(p*(r+δ)))^(1.0/(1.0-α))
-kgrid = [kmax*(1-δ)^(nk-i-1) for i∈0:(nk-1)]
-
 
 #--------------------------------#
 #  VALUE FUNCTION ITERATION
@@ -238,7 +214,7 @@ function vfi(Vbar::Float64, zgrid::Array, kgrid::Array, P::Array,  γ_c, γ_f ; 
     # check tolerance
     V_next = reshape(V_next,nz,nk)
     crit = maximum(abs.(V_next .- V_init))
-    V_init = copy(V_next)
+    V_init = V_next
     iter += 1
 
     print("iteration: ",iter, ", critical val: ", crit*1.0e5," times 10^5", "\n")
@@ -279,7 +255,7 @@ function vfivec(Vbar::Float64, zgrid::Array, kgrid::Array, P::Array, γ_c, γ_f 
       
     else # on mod(iter,nfix) != 0, update the value function only.
 
-       # Re-use conjectured index
+      # Re-use conjectured index
       idx = [index[i][2] for i∈1:(nz*nk)]
 
       # E(V) condition on A(t) and each possible K(t+1)
@@ -335,7 +311,7 @@ function young(index::Array, P::Array; crit = Inf, maxiter = 10000, iter = 0, to
     
     # check tolerance
     crit = maximum(abs.(μ_init .- μ_next))
-    μ_init = copy(μ_next)
+    μ_init = μ_next
     iter += 1
     
     print("iteration: ",iter, ", critical val: ", crit*1.0e5," times 10^5", "\n")
@@ -365,20 +341,20 @@ function aggregates(μ::Matrix,zgrid::Vector,kgrid::Vector; α = α, δ = δ, p 
   X = [kkgr, zzgr, yygr, iigr, vvgr]
   EX = zeros(size(X),)
   for (ii, x) in enumerate(X)
-    EX[ii] = sum(x.*μ_ergodic)
+    EX[ii] = sum(x.*μ)
   end
   
   #Std deviation
   STDX = zeros(size(X),)
   for (ii, x) in enumerate(X)
-    STDX[ii] = sqrt.(sum(x.^2 .*μ_ergodic) - EX[ii].^2)
+    STDX[ii] = sqrt.(sum(x.^2 .*μ) - EX[ii].^2)
   end 
   
   # correlation matrix
   CORRX = zeros(size(X)[1],size(X)[1])
   for (ii,xi) in enumerate(X)
     for (jj,xj) in enumerate(X)
-      CORRX[ii,jj] = (sum(xi.*xj.*μ_ergodic) - EX[ii]*EX[jj])/(STDX[ii]*STDX[jj])
+      CORRX[ii,jj] = (sum(xi.*xj.*μ) - EX[ii]*EX[jj])/(STDX[ii]*STDX[jj])
     end
   end
   
@@ -401,8 +377,24 @@ for (ii,str) in enumerate(para)
   
   @unpack α, p, δ, r, ρ, σ, γ_c, γ_f= str()
 
+  #steady state
+  kbar = (α/(p*(r+δ)))^(1.0/(1.0-α))
+  Vbar = ((1.0+r)/r)*(kbar^α - δ*kbar)
+
+  # technology grid
+  cover = 5
+  nz    = 2*cover+1
+  m     = 2.5
+  zgrid, P = MyTauchen(σ,ρ,nz,m)
+  zgrid = exp.(zgrid) # exponentiate grid
+
+  # capital grid
+  nk = 100
+  kmax = ((maximum(zgrid)*α)/(p*(r+δ)))^(1.0/(1.0-α))
+  kgrid = [kmax*(1-δ)^(nk-i-1) for i∈0:(nk-1)]
+
   #@time valfunc, index, crit = vfi(Vbar,zgrid,kgrid,P) #slower
-  @time valfunc, index, crit = vfivec(Vbar,zgrid,kgrid,P, γ_c, γ_f )
+  @time valfunc, index, crit = vfivec(Vbar,zgrid,kgrid,P, γ_c, γ_f)
   @time μ_ergodic, crit, iterfin = young(index,P)
 
   ## (a)
@@ -453,7 +445,6 @@ for (ii,str) in enumerate(para)
   writedlm( "aggregatesmeans_$(strpara[ii]).csv", EX, ',')
   writedlm( "correlationmatrix_$(strpara[ii]).csv", CORRX, ',')
   writedlm( "TFP_$(strpara[ii]).csv", TFP, ',')
-
 
   ## (f) implied TFP is larger than average of true underlying productivity because larger (more productive) firms produce more.
 
