@@ -80,92 +80,174 @@ end
     r::Float64      = 0.04 # interest rate
     ρ::Float64      = 0.8 # technology persistence 
     σ::Float64      = 0.2 # technology volatility
-    γ_c::Float64    = 2.5 # variable investment adjustment cost
+    γ_c::Float64    = 2.0 # variable investment adjustment cost
     γ_f::Float64    = 0.05 # fixed investment adjustment cost
 
     # household parameters
     β::Float64      = 1.0/0.04 # discount rate
-    ϕ::Float64      = 2.0 #disutility of labor
-    ν::Float64        = 0.5 #labor share
+    ϕ::Float64      = 2.5 #disutility of labor
+    ν::Float64      = 0.5 #labor share
 
     # wage bisection bounds
     a::Float64      = 0.6 #wage lower bound
-    c::Float64      = 2.0 #wage upper bound
+    c::Float64      = 1.8 #wage upper bound
 
 end
 
 #--------------------------------#
-#       MAIN FUNCTION
+# INNER LOOP - VFI & ERGODIC DIST
 #--------------------------------#
 
-function geinvest(kgrid,a,c; wmaxiter = 50, wtol = 1e-4, vmaxiter = 1000, vtol = 1e-4, nfix = 10)
+function vfivec(W::Float64, kkgr::Array, zzgr::Array, kgrid::Array, zgrid::Array;α = α, ν = ν, r = r, δ = δ, γ_f = γ_f, γ_c = γ_c, maxiter = 1000, tol = 1e-4, nfix = 10, iter = 0, verr = Inf) 
 
-    a_init = copy(a) 
-    c_init = copy(c)
+    # objects
+    nz          = length(zgrid)
+    nk          = length(kgrid)
+    labor       = zzgr.^(1.0/(1.0-ν)).*(ν/W).^(1.0/(1.0-ν)).*kkgr.^(α/(1.0-ν))
+    output      = zzgr .* kkgr.^α .* labor.^ν 
+    investment  = kgrid' .- (1.0 - δ).*kkgr # kgrid - k' policy
+    adjcost     = γ_c/2.0 .* (investment./kkgr).^2 .*kkgr + γ_f.*output.*(kgrid'.>(1-δ)*kkgr)  
+    dividend    = repeat(output,1,nk) - W * repeat(labor,1,nk) - investment - adjcost
+    
+    # steady state
+    kbar        = (α/(r+δ))^((1.0-ν)/(1.0-α-ν))*(ν/W)^(ν/(1.0-α-ν))
+    nbar        = (ν/W)^(1.0/(1.0-ν))*kbar^(α/(1.0-ν))
+    Vbar        = ((1.0+r)/r)*(kbar^α*nbar^ν - δ*kbar -W*nbar)
+
+    # initialise
+    V_init  = fill(Vbar, (nz,nk))
+    V_next  = Array{Float64,1}
+    index   = Array{CartesianIndex{2},2}
+
+    while (verr > tol && iter < maxiter) # inner-loop value function
+
+        if mod(iter,nfix) == 0 # Howard acceleration
+            
+            # obj dims: V(z×k,k')
+            obj     = dividend + (1.0/(1.0+r)).*repeat(P*V_init,nk) # compute values for V(z×k,k')
+            V_next, index = findmax(obj, dims = 2) # get maximum
+
+        else
+
+            # Re-use conjectured index
+            idx = [index[i][2] for i∈1:(nz*nk)]
+
+            # E(V) condition on A(t) and each possible K(t+1)
+            EVp = P*V_init
+            evp_k = zeros(nk*nz,)
+                
+            for ind = 1:(nz*nk)
+                zz = convert(Int, floor(mod(ind-0.05,nz))+1)
+                evp_k[ind] = EVp[zz,idx[ind]]
+            end
+
+            # Compute return function using conjectured policy - idx
+            investment_idx  = kgrid[idx] .- (1.0 - δ).*kkgr 
+            adjcost_idx     = γ_c/2.0 .* ((kgrid[idx] .- (1.0-δ)*kkgr)./kkgr).^2 .*kkgr + γ_f.*output.*(kgrid[idx].>(1-δ)*kkgr)  
+            dividend_idx    = output - W * labor - investment_idx - adjcost_idx
+
+            # Re-compute value function under conjectured optimal policy
+            V_next = dividend_idx + (1.0+r).^(-1) .* evp_k
+
+        end
+
+        # check tolerance
+        V_next  = reshape(V_next,nz,nk)
+        verr    = maximum(abs.(V_next .- V_init))
+        V_init  = copy(V_next)
+        iter   += 1
+        #print("iteration: ",iter, ", critical val: ", verr*1.0e4," times 10^4", "\n")
+
+    end # inner-loop: value function converges
+
+    index = [index[i][2] for i∈1:(nz*nk)] # policy funciton   
+    return index, labor, output, investment, adjcost
+
+end
+
+function young(index::Vector{Int64}; maxiter = 1000, tol = 1e-4, iter = 0, crit = Inf, nz = nz, nk = nk)
+
+    # initialise
+    μ_init  = fill((1/(nz*nk)), (nz,nk))
+
+    while (crit > tol && iter < maxiter)
+        
+        # intialise
+        μ_next = zeros(nz,nk)
+
+        # use policies from vfi to infer masses next period
+        for ind = 1:(nz*nk)
+        kk = convert(Int, floor((ind-0.05)/nz))+1
+        zz = convert(Int, floor(mod(ind-0.05,nz))+1)
+        μ_next[zz,index[ind]] =  μ_next[zz,index[ind]] + P[:,zz]'*μ_init[:,kk] 
+        end
+        
+        # check tolerance
+        crit = maximum(abs.(μ_init .- μ_next))
+        μ_init = μ_next
+        iter += 1
+        
+        #print("iteration: ",iter, ", critical val: ", crit*1.0e5," times 10^5", "\n")
+
+    end
+    μ_ergodic = vec(μ_init)
+    return μ_ergodic
+end
+
+#--------------------------------#
+# OUTER LOOP - WAGE
+#--------------------------------#
+
+function geinvest(a_init::Float64, c_init::Float64, kgrid::Array,zgrid::Array; wmaxiter::Int64 = 50, tol::Float64 = 1e-4, nk::Int64 = nk, nz::Int64 = nz, α::Float64=α, δ::Float64 = δ, r::Float64 = r, γ_c::Float64 = γ_c, γ_f::Float64 = γ_f, ϕ::Float64 = ϕ, ν::Float64 = ν, witer = 0, werr = Inf)
+
+    a = copy(a_init) 
+    c = copy(c_init)
     
     # useful grids
     kkgr = vec(repeat(kgrid',nz))
     zzgr = repeat(zgrid,nk,1)
+    μ_ergodic = Vector{Float64}
 
-    # initialise 
-    viter = 1
-    witer = 1
-
-    while (werr > wtol && witer < wmaxiter) #outer loop for wage
+    while (werr > tol && witer < wmaxiter) #outer loop for wage
         
-        W           = (a_init+c_init)/2.0 
-        labor       = zzgr.^(1.0/(1.0-ν)).*(ν/W).^(1.0/(1.0-ν)).*kkgr.^(α/(1.0-ν))
-        output      = zzgr .* kkgr.^α .* labor.^ν 
-        investment  = kgrid' .- (1.0 - δ).*kkgr # kgrid - k' policy
-        adjcost     = γ_c/2.0 .* ((kgrid' .- (1.0-δ)*kkgr)./kkgr).^2 .*kkgr + γ_f.*output.*(kgrid'.>(1-δ)*kkgr)  
-        dividend    = repeat(output,1,nk) - W * repeat(labor,1,nk) - investment - adjcost
+        # compute wage
+        b = (a+c)/2.0
+        W = copy(b)
 
-        # steady state
-        kbar        = (α/(r+δ))^((1.0-ν)/(1.0-α-ν))*(ν/b)^(ν/(1.0-α-ν))
-        nbar        = (ν/b)^(1.0/(1.0-ν))*kbar^(α/(1.0-ν))
-        Vbar        = ((1.0+r)/r)*(kbar^α*nbar^ν - δ*kbar -b*nbar)
+        # value-function iteration
+        index, labor, output, investment, adjcost = vfivec(W,kkgr,zzgr,kgrid,zgrid) 
+        
+        # obtain ergodic distribution
+        μ_ergodic = young(index)
 
-        # initialise
-        V_init = fill(Vbar, (nz,nk))
-        V_next = Array{Float64,1}
+        #------------------------------------------#
+        #  COMPUTE AGGREGATES
+        #------------------------------------------#
+    
+        Lagg        = sum(μ_ergodic.*labor)
+        Yagg        = sum(μ_ergodic.*output)
+        Kagg        = sum(μ_ergodic.*kkgr)
+        Zagg        = sum(μ_ergodic.*zzgr)
+        Iagg        = sum(μ_ergodic.*investment[index])
+        ACagg       = sum(μ_ergodic.*adjcost[index])
 
-        while (verr > vtol && viter < maxiter)
-
-            if mod(iter,nfix) == 0 # Howard acceleration
-                
-                obj     = dividend + (1.0/(1.0+r)).*repeat(P*V_init,nk) - Inf*(dividend.<0) # compute values for V(z×k,k')
-                V_next, index = findmax(obj, dims = 2) # get maximum
-
-            else
-
-                # Re-use conjectured index
-                idx = [index[i][2] for i∈1:(nz*nk)]
-
-                # E(V) condition on A(t) and each possible K(t+1)
-                EVp = P*V_init
-                evp_k = zeros(nk*nz,)
-                    
-                for ind = 1:(nz*nk)
-                    zz = convert(Int, floor(mod(ind-0.05,nz))+1)
-                    evp_k[ind] = EVp[zz,idx[ind]]
-                end
-
-                # Compute return function using conjectured policy - idx
-                investment_idx  = kgrid[idx] .- (1.0 - δ).*kkgr 
-                adjcost_idx     = γ_c/2.0 .* ((kgrid[idx] .- (1.0-δ)*kkgr)./kkgr).^2 .*kkgr + γ_f.*output.*(kgrid[idx].>(1-δ)*kkgr)  
-                dividend_idx    = output - W * labor - investment_idx - adjcost_idx
-
-                # Re-compute value function under conjectured optimal policy
-                V_next = dividend + (1.0+r).^(-1) .* evp_k - Inf*(dividend_idx.<0) 
-
-            end
-
-
-
+        # compute error for W outer-loop
+        Cagg        = Yagg .- Iagg .- ACagg
+        diff        = W - ϕ * Cagg
+        werr        = abs(diff)
+        witer       += 1 
+        
+        if diff > 0
+            c = copy(b)
+        elseif diff < 0
+            a = copy(b)
         end
 
+        print("iteration: ",witer, ", critical val: ", werr*1.0e4," times 10^4 ", " wage ", W,  "\n")
 
-    end
+        
+    end # outer-loop: wage converges
+    return index,W,μ_ergodic
 end
 
 #--------------------------------#
@@ -173,12 +255,6 @@ end
 #--------------------------------#
 
 @unpack α, δ, r, ρ, σ, γ_c, γ_f, β, ϕ, ν, a, c= params()
-
-#steady state
-b = (a+c)/2.0 # "middle wage"
-kbar = (α/(r+δ))^((1.0-ν)/(1.0-α-ν))*(ν/b)^(ν/(1.0-α-ν))
-nbar = (ν/b)^(1.0/(1.0-ν))*kbar^(α/(1.0-ν))
-Vbar = ((1.0+r)/r)*(kbar^α*nbar^ν - δ*kbar -b*nbar)
 
 # technology grid
 cover = 2
@@ -191,3 +267,6 @@ zgrid = exp.(zgrid) # exponentiate grid
 nk = 50
 kmax = (α/(r+δ))^((1.0-ν)/(1.0-α-ν))*(ν/a)^(ν/(1.0-α-ν))*maximum(zgrid)^(1.0/(1.0-α-ν))
 kgrid = [kmax*(1-δ)^(nk-i-1) for i∈0:(nk-1)]
+
+# main loop
+@time index, W, μ_ergodic  = geinvest(a, c, kgrid, zgrid)
