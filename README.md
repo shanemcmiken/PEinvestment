@@ -1,7 +1,7 @@
 # Benchmark PE Firm Investment
 I solve the benchmark partial equilibrium firm investment model. 
     <embed src="https://github.com/shanemcmiken/RBC_3ways/blob/main/src/Model.pdf">
-        <p>You can see the model and output <a href="https://github.com/shanemcmiken/PEinvesment/blob/main/06c002769c39ae369b6444b63501d4bb8ccb2dc1/src/Results.pdf">here</a>.</p>
+        <p>You can see the model and output <a href="src/Results.pdf">here</a>.</p>
     </embed>
 </object>
 
