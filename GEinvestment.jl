@@ -1,6 +1,6 @@
 ###############################################################################
 #
-# reiter.jl solves the KT general equlibrium model of firm investment with labor
+# GEinvestment.jl solves the KT general equlibrium model of firm investment with labor
 #
 # Shane McMiken
 # November 2021
@@ -15,7 +15,7 @@
 # RECURSIVE FIRM PROBLEM:
 # V(Z,K) = max_K' {R(Z,K,K') + (1/(1+r))* E[V(Z',K')|Z] } 
 # 
-# WHERE R(z,k,k') = Z * K^α * N^(1-α) - pK + p(1-δ)K - AC(Z,K,K')
+# WHERE R(z,k,k') = Z * K^α * N^ν - pK + p(1-δ)K - AC(Z,K,K')
 #
 ################################################################################
 
@@ -24,8 +24,6 @@
 #--------------------------------#
 using Plots # plots
 using Distributions # cdf(normal())
-#using QuantEcon
-#using Distributed
 using Parameters  # macros: @with_kw & @unpack
 #using DelimitedFiles # writedlm 
 
@@ -80,16 +78,16 @@ end
     r::Float64      = 0.04 # interest rate
     ρ::Float64      = 0.8 # technology persistence 
     σ::Float64      = 0.2 # technology volatility
-    γ_c::Float64    = 2.0 # variable investment adjustment cost
-    γ_f::Float64    = 0.05 # fixed investment adjustment cost
+    γ_c::Float64    = 2.5 # variable investment adjustment cost
+    γ_f::Float64    = 0.0 # fixed investment adjustment cost
 
     # household parameters
     β::Float64      = 1.0/0.04 # discount rate
-    ϕ::Float64      = 2.5 #disutility of labor
+    ϕ::Float64      = 2.0 #disutility of labor
     ν::Float64      = 0.5 #labor share
 
     # wage bisection bounds
-    a::Float64      = 0.6 #wage lower bound
+    a::Float64      = 0.4 #wage lower bound
     c::Float64      = 1.8 #wage upper bound
 
 end
@@ -109,6 +107,7 @@ function vfivec(W::Float64, kkgr::Array, zzgr::Array, kgrid::Array, zgrid::Array
     adjcost     = γ_c/2.0 .* (investment./kkgr).^2 .*kkgr + γ_f.*output.*(kgrid'.>(1-δ)*kkgr)  
     dividend    = repeat(output,1,nk) - W * repeat(labor,1,nk) - investment - adjcost
     
+
     # steady state
     kbar        = (α/(r+δ))^((1.0-ν)/(1.0-α-ν))*(ν/W)^(ν/(1.0-α-ν))
     nbar        = (ν/W)^(1.0/(1.0-ν))*kbar^(α/(1.0-ν))
@@ -198,27 +197,32 @@ end
 # OUTER LOOP - WAGE
 #--------------------------------#
 
-function geinvest(a_init::Float64, c_init::Float64, kgrid::Array,zgrid::Array; wmaxiter::Int64 = 50, tol::Float64 = 1e-4, nk::Int64 = nk, nz::Int64 = nz, α::Float64=α, δ::Float64 = δ, r::Float64 = r, γ_c::Float64 = γ_c, γ_f::Float64 = γ_f, ϕ::Float64 = ϕ, ν::Float64 = ν, witer = 0, werr = Inf)
+function geinvest(a_init::Float64, c_init::Float64, kgrid::Array,zgrid::Array; wmaxiter::Int64 = 50, tol::Float64 = 1e-4, nk::Int64 = nk, nz::Int64 = nz, α::Float64=α, δ::Float64 = δ, r::Float64 = r, γ_c::Float64 = γ_c, γ_f::Float64 = γ_f, ϕ::Float64 = ϕ, ν::Float64 = ν, iter = 0, err = Inf)
 
+    # wage initialisation
     a = copy(a_init) 
     c = copy(c_init)
-    
+    b = (a+c)/2.0
+    W_next = (a_init + c_init)/2.0
+
     # useful grids
     kkgr = vec(repeat(kgrid',nz))
     zzgr = repeat(zgrid,nk,1)
     μ_ergodic = Vector{Float64}
+    index = Vector{Int64}
 
-    while (werr > tol && witer < wmaxiter) #outer loop for wage
+    while (err > tol && iter < wmaxiter) #outer loop for wage
         
-        # compute wage
-        b = (a+c)/2.0
-        W = copy(b)
+        # update prices
+        W = copy(W_next)
 
         # value-function iteration
-        index, labor, output, investment, adjcost = vfivec(W,kkgr,zzgr,kgrid,zgrid) 
-        
+        index_stat, labor, output, investment, adjcost = vfivec(W,kkgr,zzgr,kgrid,zgrid) 
+        index = copy(index_stat)
+
         # obtain ergodic distribution
-        μ_ergodic = young(index)
+        μ = young(index)
+        μ_ergodic = copy(μ)
 
         #------------------------------------------#
         #  COMPUTE AGGREGATES
@@ -230,24 +234,27 @@ function geinvest(a_init::Float64, c_init::Float64, kgrid::Array,zgrid::Array; w
         Zagg        = sum(μ_ergodic.*zzgr)
         Iagg        = sum(μ_ergodic.*investment[index])
         ACagg       = sum(μ_ergodic.*adjcost[index])
-
-        # compute error for W outer-loop
         Cagg        = Yagg .- Iagg .- ACagg
-        diff        = W - ϕ * Cagg
-        werr        = abs(diff)
-        witer       += 1 
         
+        # compute error for prices outer-loop
+        diff        = W - ϕ * Cagg
+        err         = abs(diff)
+        iter        += 1 
+
+        # update prices for outer loop
         if diff > 0
             c = copy(b)
         elseif diff < 0
             a = copy(b)
         end
+        b = (a+c)/2.0
+        W_next = b
 
-        print("iteration: ",witer, ", critical val: ", werr*1.0e4," times 10^4 ", " wage ", W,  "\n")
+        #print("iteration: ",iter, ", critical val: ", err*1.0e4," times 10^4 ", " wage ", W, " diff ", diff,   " Cagg ", Cagg,  "\n")
 
-        
     end # outer-loop: wage converges
-    return index,W,μ_ergodic
+
+    return index,W_next,μ_ergodic
 end
 
 #--------------------------------#
@@ -257,16 +264,23 @@ end
 @unpack α, δ, r, ρ, σ, γ_c, γ_f, β, ϕ, ν, a, c= params()
 
 # technology grid
-cover = 2
+cover = 5
 nz    = 2*cover+1
 m     = 2.5
 zgrid, P = MyTauchen(σ,ρ,nz,m)
 zgrid = exp.(zgrid) # exponentiate grid
 
 # capital grid
-nk = 50
+nk = 100
 kmax = (α/(r+δ))^((1.0-ν)/(1.0-α-ν))*(ν/a)^(ν/(1.0-α-ν))*maximum(zgrid)^(1.0/(1.0-α-ν))
 kgrid = [kmax*(1-δ)^(nk-i-1) for i∈0:(nk-1)]
 
 # main loop
 @time index, W, μ_ergodic  = geinvest(a, c, kgrid, zgrid)
+
+# plots
+ergodicdist = heatmap(kgrid,zgrid,reshape(μ_ergodic,nz,nk), title = "Ergodic distribution")
+display(ergodicdist)
+
+policyfunc = heatmap(kgrid,zgrid,reshape(index,(nz,nk)), title = "Ergodic distribution")
+display(policyfunc)
