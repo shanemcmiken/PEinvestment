@@ -275,12 +275,25 @@ nk = 100
 kmax = (α/(r+δ))^((1.0-ν)/(1.0-α-ν))*(ν/a)^(ν/(1.0-α-ν))*maximum(zgrid)^(1.0/(1.0-α-ν))
 kgrid = [kmax*(1-δ)^(nk-i-1) for i∈0:(nk-1)]
 
-# main loop
+# Convex adjustment cost 
 @time index, W, μ_ergodic  = geinvest(a, c, kgrid, zgrid)
 
-# plots
-ergodicdist = heatmap(kgrid,zgrid,reshape(μ_ergodic,nz,nk), title = "Ergodic distribution")
-display(ergodicdist)
+# policy function
 
-policyfunc = heatmap(kgrid,zgrid,reshape(index,(nz,nk)), title = "Ergodic distribution")
+#ergodicdist = heatmap(kgrid,zgrid,reshape(μ_ergodic,nz,nk), title = "Ergodic distribution")
+#display(ergodicdist)
+#savefig(ergodicdist,"./src/GEergodicdistribution.png")
+
+policyfunc = heatmap(kgrid,zgrid,reshape(index,(nz,nk)), title = "k'(z,k) Policy")
 display(policyfunc)
+savefig(policyfunc,"./src/GEpolicyfunction_ConvexAC.png")
+
+
+# Fixed Adjustment cost 
+γ_c, γ_f = 0.0, 0.05
+@time index, W, μ_ergodic  = geinvest(a, c, kgrid, zgrid)
+
+# policy function
+policyfunc = heatmap(kgrid,zgrid,reshape(index,(nz,nk)), title = "k'(z,k) Policy")
+display(policyfunc)
+savefig(policyfunc,"./src/GEpolicyfunction_FixedAC.png")
